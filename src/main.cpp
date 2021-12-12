@@ -1,4 +1,4 @@
-#include "concurrent_queue.h"
+#include "concurrent_queue_impl.h"
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -13,6 +13,11 @@ int main(int argc, char **argv) {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   std::cout << "sleep off" << std::endl;
   auto elem = cq.Dequeue();
-  std::cout << elem << std::endl;
+  if (!elem)
+  {
+    return 1;
+  }
+  
+  std::cout << elem.value() << std::endl;
   return 0;
 }
