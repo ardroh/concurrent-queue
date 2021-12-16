@@ -12,81 +12,29 @@ namespace eventHorizon {
 
 template <class T> class ConcurrentQueue final : public IConcurrentQueue<T> {
 public:
-  ~ConcurrentQueue() override {
-    terminationRequest_ = true;
-    for (auto &th : enqueingThreads_) {
-      if (th.second.joinable()) {
-        th.second.join();
-      }
-    }
+  ~ConcurrentQueue() override = default;
+
+  virtual void enqueue(T &&element) override {
+    std::unique_lock<std::mutex> lk(queueMutex_);
+    queue_.emplace(std::move(element));
   }
 
-  void EnqueueAsync(T &&element) override {
-    std::thread th(
-        [&](T &&elem) {
-          if (!queueMutex_.try_lock_for(std::chrono::milliseconds(100)) ||
-              terminationRequest_) {
-            detach(std::this_thread::get_id());
-            return;
-          }
-          queue_.push(element);
-          queueMutex_.unlock();
-          detach(std::this_thread::get_id());
-        },
-        std::move(element));
-    std::unique_lock<std::mutex> lk(enqueingThreadsMutex_);
-    enqueingThreads_.emplace(std::piecewise_construct,
-                             std::forward_as_tuple(th.get_id()),
-                             std::forward_as_tuple(std::move(th)));
-  }
-
-  std::optional<T> Dequeue() override {
-    std::unique_lock<std::timed_mutex> lk(queueMutex_);
-    if (queue_.empty()) {
-      return {};
+  virtual bool
+  dequeue_wait(T &element, const std::chrono::milliseconds &duration) override {
+    std::unique_lock<std::mutex> lk(queueMutex_);
+    if (queue_.empty() && elementEnqueued.wait_for(lk, duration) ==
+                              std::cv_status::timeout) {
+      return false;
     }
-    auto elem = queue_.front();
+    element = std::move(queue_.front());
     queue_.pop();
-    return elem;
-  }
-
-  bool Wait(const std::chrono::nanoseconds &duration) override {
-    if (HasItems()) {
-      return true;
-    }
-    std::mutex waitMutex;
-    std::unique_lock<std::mutex> lk(waitMutex);
-    return itemsEnqueued.wait_for(lk, duration) == std::cv_status::no_timeout;
-  }
-
-  bool HasItems() override {
-    std::unique_lock<std::timed_mutex> lk(queueMutex_);
-    return queue_.empty();
-  }
-
-private:
-  void detach(const std::thread::id &threadId) {
-    if (terminationRequest_) {
-      return;
-    }
-
-    std::unique_lock<std::mutex> lk(enqueingThreadsMutex_);
-    auto threadPair = enqueingThreads_.find(threadId);
-    if (threadPair == enqueingThreads_.end()) {
-      return;
-    }
-    threadPair->second.detach();
-
-    enqueingThreads_.erase(threadPair);
+    return true;
   }
 
 private:
   std::queue<T> queue_;
-  std::timed_mutex queueMutex_;
-  std::unordered_map<std::thread::id, std::thread> enqueingThreads_;
-  std::mutex enqueingThreadsMutex_;
-  std::atomic_bool terminationRequest_ = false;
-  std::condition_variable itemsEnqueued;
+  std::mutex queueMutex_;
+  std::condition_variable elementEnqueued;
 };
 
 } // namespace eventHorizon
